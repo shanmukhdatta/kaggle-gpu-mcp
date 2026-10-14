@@ -32,6 +32,13 @@ class Worker:
             self.service.db.update(job["id"], "FAILED", "Prepared job package missing",
                                    last_error="Missing immutable submission package")
             return
+        # Dependency references become known only after the preparation job finishes.
+        # Update generated metadata while preserving the frozen approved source code.
+        if job["depends_on"]:
+            metadata_path = folder / "kernel-metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["kernel_sources"] = job["kernel_sources"]
+            metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
         # IMPORTANT: distinguish unknown after push timeout from a definite failure.
         self.service.db.update(job["id"], "SUBMITTING", "Starting Kaggle push")
         try:
