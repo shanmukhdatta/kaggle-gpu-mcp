@@ -1,4 +1,5 @@
 """Validated tool-use operations and immutable job packaging."""
+import hashlib
 import json
 import re
 import shutil
@@ -58,6 +59,12 @@ class Service:
         code = Path(job["code_path"])
         file_name = "task" + code.suffix.lower()
         shutil.copy2(code, folder / file_name)
+        # Hash the approved bytes. Later edits to the workspace cannot silently
+        # modify the approved remote execution package.
+        code_hash = hashlib.sha256((folder / file_name).read_bytes()).hexdigest()
+        job_meta = dict(job["metadata"])
+        job_meta["source_sha256"] = code_hash
+        self.db.update(job["id"], job["status"], "Approved package frozen", metadata=job_meta)
         slug = job["kernel_ref"].split("/")[1]
         # Title and slug are intentionally identical: Kaggle ties notebook titles to slugs.
         metadata = {
