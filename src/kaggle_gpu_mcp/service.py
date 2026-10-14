@@ -230,6 +230,30 @@ class Service:
         """Report schema and missing data without returning private row samples."""
         return profile_csv(allow_file(self.s.workspace, source_path, (".csv",)))
 
+    def workflow_status(self, training_job_id: str) -> dict:
+        """Report the durable dependency chain and current saved artifacts."""
+        training = self.db.get(training_job_id)
+        parent_id = training["depends_on"]
+        if not parent_id:
+            raise ValueError("Job is not part of a dependent workflow")
+        parent = self.db.get(parent_id)
+        child_details = self.details(training_job_id)
+        status = "FAILED" if "FAILED" in (parent["status"], training["status"]) else (
+            "COMPLETED" if training["status"] == "COMPLETED" else "RUNNING")
+        return {
+            "status": status,
+            "preparation": {"job_id": parent_id, "status": parent["status"],
+                            "kernel_ref": parent["kernel_ref"]},
+            "training": {"job_id": training_job_id, "status": training["status"],
+                         "kernel_ref": training["kernel_ref"]},
+            "artifacts": child_details.get("artifacts", {"status": "not_downloaded"}),
+        }
+
+    def notification_retry(self, job_id: str, approved: bool = False) -> dict:
+        if not approved:
+            raise ValueError("Retrying notification requires approved=true")
+        return self.db.retry_notification(job_id)
+
     def merge_csv(self, paths: list[str], output_name: str = "combined.csv") -> dict:
         """Merge same-schema local CSV files. Explicit files only; no web scraping."""
         import csv

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +52,10 @@ class Store:
                 CREATE INDEX IF NOT EXISTS idx_dataset_catalog_registered
                     ON dataset_catalog(registered_at);
             """)
+            # Safe migration for workspaces created with the initial schema.
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(notifications)")}
+            if "next_attempt_at" not in columns:
+                conn.execute("ALTER TABLE notifications ADD COLUMN next_attempt_at TEXT NOT NULL DEFAULT ''")
 
     def db(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path, timeout=30)
@@ -141,14 +145,48 @@ class Store:
 
     def notifications(self) -> list[dict]:
         with self.db() as conn:
-            return [dict(r) for r in conn.execute(
-                "SELECT * FROM notifications WHERE state='PENDING' AND tries<3 ORDER BY id LIMIT 10")]
+            rows = conn.execute(
+                """SELECT * FROM notifications WHERE state='PENDING' AND tries<3
+                   AND (next_attempt_at='' OR next_attempt_at<=?) ORDER BY id LIMIT 10""",
+                (now(),)).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_notifications(self, limit: int = 50) -> list[dict]:
+        with self.db() as conn:
+            rows = conn.execute(
+                "SELECT * FROM notifications ORDER BY id DESC LIMIT ?",
+                (max(1, min(limit, 200)),)).fetchall()
+        return [dict(row) for row in rows]
 
     def notification_update(self, row_id: int, state: str, error: str = "") -> None:
+        """Retry with bounded backoff; stop after three failed deliveries."""
         with self.db() as conn:
-            conn.execute("UPDATE notifications SET state=?, tries=tries+1,last_error=? WHERE id=?",
-                         (state, error[:200], row_id))
+            row = conn.execute("SELECT tries FROM notifications WHERE id=?", (row_id,)).fetchone()
+            if row is None:
+                raise KeyError("Unknown notification")
+            attempts = int(row[0]) + (1 if state in ("SENT", "PENDING") else 0)
+            final = "EXHAUSTED" if state == "PENDING" and attempts >= 3 else state
+            delayed = ""
+            if final == "PENDING":
+                delay = min(3600, 60 * (2 ** (attempts - 1)))
+                delayed = (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat()
+            conn.execute("""UPDATE notifications SET state=?,tries=?,last_error=?,
+                         next_attempt_at=? WHERE id=?""",
+                         (final, attempts, error[:200], delayed, row_id))
 
+    def retry_notification(self, job_id: str) -> dict:
+        job = self.get(job_id)
+        if job["status"] not in TERMINAL:
+            raise ValueError("Only completed or failed jobs can send notifications")
+        with self.db() as conn:
+            row = conn.execute("SELECT * FROM notifications WHERE job_id=?", (job_id,)).fetchone()
+            if row is None:
+                raise ValueError("Terminal job has no notification record")
+            if row["state"] == "SENT":
+                raise ValueError("Already delivered; refusing duplicate email")
+            conn.execute("""UPDATE notifications SET state='PENDING',tries=0,
+                         last_error='',next_attempt_at='' WHERE job_id=?""", (job_id,))
+        return {"job_id": job_id, "notification": "PENDING"}
 
     def register_dataset(self, source_type: str, reference: str, license_name: str,
                          metadata: dict) -> dict:
