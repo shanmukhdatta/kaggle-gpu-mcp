@@ -41,6 +41,16 @@ class Store:
                     state TEXT NOT NULL DEFAULT 'PENDING', tries INTEGER NOT NULL DEFAULT 0,
                     last_error TEXT NOT NULL DEFAULT ''
                 );
+                CREATE TABLE IF NOT EXISTS dataset_catalog (
+                    id TEXT PRIMARY KEY,
+                    source_type TEXT NOT NULL,
+                    reference TEXT NOT NULL,
+                    license_name TEXT NOT NULL,
+                    metadata TEXT NOT NULL,
+                    registered_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_dataset_catalog_registered
+                    ON dataset_catalog(registered_at);
             """)
 
     def db(self) -> sqlite3.Connection:
@@ -138,3 +148,23 @@ class Store:
         with self.db() as conn:
             conn.execute("UPDATE notifications SET state=?, tries=tries+1,last_error=? WHERE id=?",
                          (state, error[:200], row_id))
+
+
+    def register_dataset(self, source_type: str, reference: str, license_name: str,
+                         metadata: dict) -> dict:
+        """Record immutable dataset provenance. Does not upload dataset contents."""
+        item = {"id": uuid.uuid4().hex, "source_type": source_type,
+                "reference": reference, "license_name": license_name,
+                "metadata": metadata, "registered_at": now()}
+        with self.db() as conn:
+            conn.execute("INSERT INTO dataset_catalog VALUES(?,?,?,?,?,?)", (
+                item["id"], source_type, reference, license_name,
+                json.dumps(metadata), item["registered_at"]))
+        return item
+
+    def datasets(self, limit: int = 50) -> list[dict]:
+        with self.db() as conn:
+            rows = conn.execute("SELECT * FROM dataset_catalog ORDER BY registered_at DESC LIMIT ?",
+                                (max(1, min(limit, 200)),)).fetchall()
+        return [dict(**{k: (json.loads(r[k]) if k == "metadata" else r[k])
+                        for k in r.keys()}) for r in rows]
