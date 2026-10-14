@@ -26,7 +26,12 @@ class Worker:
                                last_error=f"{prefix}: {type(exc).__name__}")
 
     def _submit(self, job: dict) -> None:
-        folder = self.service._package(job)
+        # The package was frozen when the job was queued; never recopy editable source.
+        folder = self.s.workspace / "packages" / job["id"]
+        if not (folder / "kernel-metadata.json").is_file():
+            self.service.db.update(job["id"], "FAILED", "Prepared job package missing",
+                                   last_error="Missing immutable submission package")
+            return
         # IMPORTANT: distinguish unknown after push timeout from a definite failure.
         self.service.db.update(job["id"], "SUBMITTING", "Starting Kaggle push")
         try:
