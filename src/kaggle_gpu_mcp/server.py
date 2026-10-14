@@ -122,6 +122,21 @@ def create_server(settings: Settings | None = None):
         return service.merge_csv(paths, output_name)
 
     @mcp.tool()
+    def kaggle_workflow_status(training_job_id: str) -> dict:
+        """Read combined CPU preparation and GPU training state and final artifacts."""
+        return service.workflow_status(training_job_id)
+
+    @mcp.tool()
+    def kaggle_notification_inbox(limit: int = 50) -> list[dict]:
+        """Inspect durable completion notices and email delivery state."""
+        return service.db.list_notifications(limit)
+
+    @mcp.tool()
+    def kaggle_retry_notification(job_id: str, approved: bool = False) -> dict:
+        """Requeue a failed/skipped terminal-job email after explicit authorization."""
+        return service.notification_retry(job_id, approved)
+
+    @mcp.tool()
     def kaggle_test_notification(approved: bool = False) -> dict:
         """Send a manual SMTP test to the configured notification address."""
         if not approved:
