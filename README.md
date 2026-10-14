@@ -36,7 +36,6 @@ Submit scripts and notebooks, run a two-stage CPU data-preparation -> GPU PyTorc
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
-python -m pip install kaggle
 
 # Authenticate using Kaggle's official CLI instructions.
 # Never paste API tokens into chat or the repository.
@@ -45,6 +44,7 @@ $env:KGM_KAGGLE_USERNAME = "YOUR_KAGGLE_USERNAME"
 # Opt in to authorized Kaggle execution only after reviewing the code:
 $env:KGM_ALLOW_SUBMISSIONS = "1"
 
+kaggle-gpu-mcp doctor
 kaggle-gpu-mcp check
 kaggle-gpu-mcp demo
 python -m pytest -q
@@ -155,7 +155,7 @@ pytest -q
 python -m compileall -q src
 ```
 
-Run the **real Kaggle GPU acceptance test** manually with `kaggle-gpu-mcp run-demo --approve` after setting credentials. A local unit-test pass cannot prove real Kaggle authentication, GPU allocation, notebook completion or SMTP delivery. For additional detail read [architecture](docs/ARCHITECTURE.md), [dataset provenance](docs/DATASETS.md), [notifications](docs/NOTIFICATIONS.md) and [acceptance checklist](docs/ACCEPTANCE.md).
+The GitHub CI quality matrix validates MCP SDK v2 tool registration and the Kaggle CLI adapter command contract. Local `pytest` may skip the MCP contract test if the SDK is not installed. Run the **real Kaggle GPU acceptance test** manually with `kaggle-gpu-mcp run-demo --approve` after setting credentials. A local unit-test pass cannot prove real Kaggle authentication, GPU allocation, notebook completion or SMTP delivery. For additional detail read [architecture](docs/ARCHITECTURE.md), [dataset provenance](docs/DATASETS.md), [notifications](docs/NOTIFICATIONS.md), [Windows/Antigravity testing](docs/ANTIGRAVITY_ACCEPTANCE.md), and [acceptance checklist](docs/ACCEPTANCE.md).
 
 ## Publish to GitHub
 
@@ -177,5 +177,7 @@ If the downloaded project has no `.git` directory, run `git init -b main && git 
 - SHA-256 checksums detect accidental corruption but do not prove that downloaded models are benign.
 - Never load untrusted Python pickle model artifacts outside a sandbox.
 - Tests use simulated notebook outputs, including a placeholder checkpoint. Only Kaggle can prove the real run.
+
+Development is organized into phase-specific pull requests; see [phase tracker](docs/PHASE_TRACKER.md).
 
 MIT licensed.

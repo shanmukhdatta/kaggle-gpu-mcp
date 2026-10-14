@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [{name="Kaggle GPU MCP Contributors"}]
-dependencies = ["mcp>=2,<3"]
+dependencies = ["mcp>=2,<3", "kaggle>=1.7,<2"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.8", "mypy>=1.12"]
