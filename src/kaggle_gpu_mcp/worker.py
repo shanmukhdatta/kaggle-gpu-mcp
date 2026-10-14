@@ -1,4 +1,5 @@
 """Single-instance worker: queued submission, remote polling, outputs, notification outbox."""
+import hashlib
 import json
 import shutil
 import time
@@ -10,6 +11,7 @@ from .notify import Mailer
 from .provider import KaggleCLI, interpret_status
 from .service import Service
 from .store import now
+from .worker_lock import exclusive_worker_lock
 
 
 class Worker:
@@ -28,15 +30,22 @@ class Worker:
     def _submit(self, job: dict) -> None:
         # The package was frozen when the job was queued; never recopy editable source.
         folder = self.s.workspace / "packages" / job["id"]
-        if not (folder / "kernel-metadata.json").is_file():
-            self.service.db.update(job["id"], "FAILED", "Prepared job package missing",
-                                   last_error="Missing immutable submission package")
+        metadata_path = folder / "kernel-metadata.json"
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            code_path = folder / metadata["code_file"]
+            expected_hash = job["metadata"]["source_sha256"]
+            if code_path.name not in {"task.py", "task.ipynb"} or not code_path.is_file():
+                raise ValueError("Missing frozen training source")
+            actual_hash = hashlib.sha256(code_path.read_bytes()).hexdigest()
+            if actual_hash != expected_hash:
+                raise ValueError("Approved source code modified after job registration")
+        except (OSError, KeyError, ValueError, json.JSONDecodeError) as exc:
+            self._error(job, exc, "Approved package integrity check failed")
             return
         # Dependency references become known only after the preparation job finishes.
         # Update generated metadata while preserving the frozen approved source code.
         if job["depends_on"]:
-            metadata_path = folder / "kernel-metadata.json"
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
             metadata["kernel_sources"] = job["kernel_sources"]
             metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
         # IMPORTANT: distinguish unknown after push timeout from a definite failure.
@@ -125,35 +134,34 @@ class Worker:
                 self.service.db.notification_update(n["id"], "PENDING", "SMTP delivery failed")
 
     def tick(self) -> None:
-        jobs = self.service.db.list(limit=100)
-        # Dependents of failed jobs must not wait forever.
-        for job in jobs:
+        with exclusive_worker_lock(self.s.workspace):
+            self._tick_unlocked()
+
+    def _tick_unlocked(self) -> None:
+        # SQL status queries prevent starvation once more than 100 jobs exist.
+        for job in self.service.db.list_by_status(("WAITING",)):
             if job["status"] == "WAITING" and job["depends_on"]:
                 if self.service.db.get(job["depends_on"])["status"] == "FAILED":
                     self.service.db.update(job["id"], "FAILED", "Dependency failed",
                                            last_error="Preparation job failed")
-        for job in jobs:
+        for job in self.service.db.list_by_status(("SUBMITTING", "DOWNLOADING")):
             if job["status"] == "SUBMITTING":
                 self.service.db.update(job["id"], "SUBMISSION_UNKNOWN",
                                        "Worker restarted during upload; manual reconciliation required")
             if job["status"] == "DOWNLOADING":
                 self._download(job)
         # No more than configured simultaneous provider jobs.
-        active = sum(j["status"] in {"SUBMITTED", "RUNNING", "QUEUED_REMOTE",
-                                     "SUBMITTING", "SUBMISSION_UNKNOWN", "DOWNLOADING"}
-                     for j in self.service.db.list(limit=100))
+        active = self.service.db.active_count()
         if active < self.s.max_active_jobs:
-            for job in self.service.db.list(limit=100):
-                if job["status"] == "QUEUED":
-                    self._submit(job)
-                    break
-        for job in self.service.db.list(limit=100):
-            if job["status"] in {"SUBMITTED", "RUNNING", "QUEUED_REMOTE"}:
-                self._poll(job)
+            for job in self.service.db.list_by_status(("QUEUED",), limit=1):
+                self._submit(job)
+        for job in self.service.db.list_by_status(("SUBMITTED", "RUNNING", "QUEUED_REMOTE")):
+            self._poll(job)
         self._notify()
 
     def run_forever(self) -> None:
         print("Kaggle GPU MCP worker running; stop with Ctrl+C", flush=True)
-        while True:
-            self.tick()
-            time.sleep(self.s.poll_seconds)
+        with exclusive_worker_lock(self.s.workspace):
+            while True:
+                self._tick_unlocked()
+                time.sleep(self.s.poll_seconds)
