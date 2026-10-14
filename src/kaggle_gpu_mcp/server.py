@@ -101,6 +101,22 @@ def create_server(settings: Settings | None = None):
         return service.followup(previous_job_id, code_path, approved, mode, workload)
 
     @mcp.tool()
+    def kaggle_register_dataset_source(source_type: str, reference: str,
+                                       license_name: str, approved: bool = False) -> dict:
+        """Register an approved local CSV or Kaggle dataset ID with explicit license."""
+        return service.register_source(source_type, reference, license_name, approved)
+
+    @mcp.tool()
+    def kaggle_list_dataset_sources(limit: int = 50) -> list[dict]:
+        """Show source provenance records; does not reveal CSV row contents."""
+        return service.db.datasets(limit)
+
+    @mcp.tool()
+    def kaggle_profile_local_csv(source_path: str) -> dict:
+        """Return bounded schema, quality and SHA-256 information for local CSV."""
+        return service.csv_profile(source_path)
+
+    @mcp.tool()
     def kaggle_merge_local_csv(paths: list[str], output_name: str = "combined.csv") -> dict:
         """Deduplicate and merge same-schema CSV files within the workspace."""
         return service.merge_csv(paths, output_name)
