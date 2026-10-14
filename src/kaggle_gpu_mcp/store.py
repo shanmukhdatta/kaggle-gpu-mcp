@@ -7,6 +7,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# Terminal states never transition back into active work.
+TERMINAL = frozenset({"COMPLETED", "FAILED"})
+
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -78,6 +81,24 @@ class Store:
                 "SELECT id FROM jobs ORDER BY created_at DESC LIMIT ?", (min(max(1, limit), 100),))]
         return [self.get(k) for k in ids]
 
+    def list_by_status(self, states: tuple[str, ...], limit: int = 10000) -> list[dict]:
+        if not states:
+            return []
+        marks = ",".join("?" for _ in states)
+        with self.db() as conn:
+            ids = [r[0] for r in conn.execute(
+                f"SELECT id FROM jobs WHERE status IN ({marks}) ORDER BY created_at ASC LIMIT ?",
+                (*states, max(1, min(limit, 10000))))]
+        return [self.get(k) for k in ids]
+
+    def active_count(self) -> int:
+        states = ("SUBMITTED", "RUNNING", "QUEUED_REMOTE", "SUBMITTING",
+                  "SUBMISSION_UNKNOWN", "DOWNLOADING")
+        marks = ",".join("?" for _ in states)
+        with self.db() as conn:
+            row = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE status IN ({marks})", states).fetchone()
+        return int(row[0])
+
     def update(self, job_id: str, status: str, message: str = "", **fields: Any) -> None:
         allowed = {"last_error", "poll_after", "notified", "kernel_sources", "metadata"}
         if set(fields) - allowed:
@@ -88,6 +109,11 @@ class Store:
             fields["metadata"] = json.dumps(fields["metadata"])
         t = now()
         with self.db() as conn:
+            previous = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if previous is None:
+                raise KeyError("Unknown job ID")
+            if previous[0] in TERMINAL and status != previous[0]:
+                raise ValueError("Cannot transition a completed or failed job")
             conn.execute(
                 "UPDATE jobs SET status=?,updated_at=?" +
                 "".join(f",{k}=?" for k in fields) + " WHERE id=?",
