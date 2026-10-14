@@ -17,7 +17,7 @@ Submit scripts and notebooks, run a two-stage CPU data-preparation -> GPU PyTorc
 - Approved CSV combining/deduplication and creation/versioning of **private** Kaggle datasets.
 - Local/Kaggle dataset source provenance catalog, SHA-256 fingerprinting, bounded CSV profiling and atomic CSV merge manifests.
 - Metrics, model files and SHA-256 artifact manifest with actual CUDA verification.
-- SMTP STARTTLS or SMTP_SSL notifications via an outbox; no repeated emails after successful delivery.
+- SMTP STARTTLS or SMTP_SSL notifications via a durable outbox, bounded retries, and manual recovery; no repeated emails after successful delivery.
 - New approved experiments can attach previous Kaggle outputs, enabling AI-guided iteration.
 - Demo scripts for synthetic CSV preparation and a genuine PyTorch CUDA smoke test.
 - Automated offline pytest tests and CI. Real GPU tests require manually running the demo.
@@ -111,6 +111,9 @@ MCP configuration syntax depends on the host. The background worker must be run 
 | `kaggle_register_dataset_source` | Record an approved source reference, license claim and provenance |
 | `kaggle_list_dataset_sources` | Review saved dataset source records |
 | `kaggle_profile_local_csv` | Inspect bounded row/schema/missing-value statistics without exposing raw rows |
+| `kaggle_workflow_status` | Read combined CPU preparation and GPU training state |
+| `kaggle_notification_inbox` | Inspect saved completion notices and email delivery status |
+| `kaggle_retry_notification` | Requeue unsent terminal-job email with approval |
 
 Submission also requires a user-set `KGM_ALLOW_SUBMISSIONS=1` environment variable. All submitted code and source files must be inside `KGM_WORKSPACE`; symlink escapes are rejected. The client can create or edit scripts inside this workspace (through its own permitted editing capability). Remote uploads **always require explicit approval**.
 
@@ -130,7 +133,7 @@ kaggle-gpu-mcp worker
 
 Prefer entering secrets through a secure OS credential mechanism instead of saved shell scripts. The worker uses STARTTLS on port 587 by default. For TLS-at-connect, set `KGM_SMTP_USE_SSL=1` and your provider's SSL port.
 
-**Notifications** are sent after outputs are retrieved and validated, or after an explicit job failure. SMTP may be unavailable for some accounts. Email is an external notification, not a direct unsolicited ChatGPT chat message.
+**Notifications** are sent after outputs are retrieved and validated, or after an explicit job failure. The durable notification inbox is always available from the MCP even when SMTP is unavailable. Delivery retries use backoff; unsent notices can be requeued with approval. SMTP may be unavailable for some accounts. Email is an external notification, not a direct unsolicited ChatGPT chat message.
 
 ## Using a real dataset
 
@@ -152,7 +155,7 @@ pytest -q
 python -m compileall -q src
 ```
 
-Run the **real Kaggle GPU acceptance test** manually with `kaggle-gpu-mcp run-demo --approve` after setting credentials. A local unit-test pass cannot prove real Kaggle authentication, GPU allocation, notebook completion or SMTP delivery. For additional detail read [architecture](docs/ARCHITECTURE.md), [dataset provenance](docs/DATASETS.md) and [acceptance checklist](docs/ACCEPTANCE.md).
+Run the **real Kaggle GPU acceptance test** manually with `kaggle-gpu-mcp run-demo --approve` after setting credentials. A local unit-test pass cannot prove real Kaggle authentication, GPU allocation, notebook completion or SMTP delivery. For additional detail read [architecture](docs/ARCHITECTURE.md), [dataset provenance](docs/DATASETS.md), [notifications](docs/NOTIFICATIONS.md) and [acceptance checklist](docs/ACCEPTANCE.md).
 
 ## Publish to GitHub
 
