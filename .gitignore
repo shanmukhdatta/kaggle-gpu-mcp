@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.pyc
+*.egg-info/
+dist/
+build/
+.env
+.env.*
+!.env.example
+kaggle.json
+data/
+*.db
+*.db-shm
+*.db-wal
