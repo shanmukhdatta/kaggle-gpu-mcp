@@ -93,3 +93,15 @@ def test_unknown_submission_never_retried_automatically(settings):
     w.tick()
     assert svc.db.get(job["job_id"])["status"] == "SUBMISSION_UNKNOWN"
     assert len(p.pushed) == 1
+
+
+def test_source_package_is_frozen_when_queued(settings):
+    provider = FakeKaggle()
+    service = Service(settings, provider)
+    job = service.submit("train.py", approved=True)
+    package = settings.workspace / "packages" / job["job_id"] / "task.py"
+    original = package.read_bytes()
+    (settings.workspace / "train.py").write_text("print('modified after approval')")
+    Worker(settings, provider, FakeMail()).tick()
+    assert package.read_bytes() == original
+    assert provider.pushed  # The job was actually handed to the provider adapter.
