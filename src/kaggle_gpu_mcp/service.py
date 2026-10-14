@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 
 from .config import Settings
+from .dataset_catalog import profile_csv, sha256_file
 from .provider import KaggleCLI, interpret_status
 from .resources import choose
 from .security import allow_dir, allow_file, validate_ref, validate_slug, validate_sources, validate_username
@@ -207,6 +208,28 @@ class Service:
                            [*previous["kernel_sources"], previous["kernel_ref"]],
                            "train", True, require_contract=True)
 
+    def register_source(self, source_type: str, reference: str, license_name: str,
+                        approved: bool = False) -> dict:
+        """Register a Kaggle reference or an approved workspace CSV; do not download."""
+        if not approved:
+            raise ValueError("Dataset provenance registration requires approved=true")
+        if not re.fullmatch(r"[A-Za-z0-9.-]{2,40}", license_name):
+            raise ValueError("License identifier is required")
+        if source_type == "kaggle":
+            clean = validate_ref(reference)
+            metadata = {"discovery": "user-supplied-reference", "checked_remote": False}
+        elif source_type == "local_csv":
+            file = allow_file(self.s.workspace, reference, (".csv",))
+            clean = file.relative_to(self.s.workspace).as_posix()
+            metadata = profile_csv(file)
+        else:
+            raise ValueError("source_type must be kaggle or local_csv")
+        return self.db.register_dataset(source_type, clean, license_name, metadata)
+
+    def csv_profile(self, source_path: str) -> dict:
+        """Report schema and missing data without returning private row samples."""
+        return profile_csv(allow_file(self.s.workspace, source_path, (".csv",)))
+
     def merge_csv(self, paths: list[str], output_name: str = "combined.csv") -> dict:
         """Merge same-schema local CSV files. Explicit files only; no web scraping."""
         import csv
@@ -230,28 +253,57 @@ class Service:
         target = output_folder / output_name
         if target.exists() or any(p.resolve() == target.resolve() for p in source_paths):
             raise ValueError("Output exists or would overwrite input")
+        import os
+        import tempfile
         schema = None
         seen = set()
         count = 0
-        with target.open("w", newline="", encoding="utf-8") as dest:
-            writer = None
-            for path in source_paths:
-                with path.open(newline="", encoding="utf-8-sig") as source:
-                    reader = csv.DictReader(source)
-                    if not reader.fieldnames:
-                        raise ValueError("CSV missing header")
-                    if schema is None:
-                        schema = reader.fieldnames
-                        writer = csv.DictWriter(dest, fieldnames=schema)
-                        writer.writeheader()
-                    if reader.fieldnames != schema:
-                        target.unlink(missing_ok=True)
-                        raise ValueError("Cannot combine CSV files with mismatched schemas")
-                    for row in reader:
-                        key = tuple(row.get(k, "") for k in schema)
-                        if key not in seen:
-                            seen.add(key)
-                            writer.writerow(row)
-                            count += 1
+        fd, temp_name = tempfile.mkstemp(prefix=".merge-", suffix=".csv", dir=output_folder)
+        os.close(fd)
+        temporary = Path(temp_name)
+        try:
+            with temporary.open("w", newline="", encoding="utf-8") as dest:
+                writer = None
+                for path in source_paths:
+                    with path.open(newline="", encoding="utf-8-sig") as source:
+                        reader = csv.DictReader(source)
+                        if not reader.fieldnames:
+                            raise ValueError("CSV missing header")
+                        if schema is None:
+                            schema = reader.fieldnames
+                            if len(set(schema)) != len(schema):
+                                raise ValueError("Duplicate input CSV headers")
+                            writer = csv.DictWriter(dest, fieldnames=schema)
+                            writer.writeheader()
+                        if reader.fieldnames != schema:
+                            raise ValueError("Cannot combine CSV files with mismatched schemas")
+                        for row in reader:
+                            if None in row:
+                                raise ValueError("CSV row has more fields than header")
+                            key = tuple(row.get(k, "") for k in schema)
+                            if key not in seen:
+                                seen.add(key)
+                                writer.writerow(row)
+                                count += 1
+            if temporary.stat().st_size > self.s.max_artifact_bytes:
+                raise ValueError("Merged CSV exceeds configured artifact limit")
+            provenance = {
+                "input_sources": [{"path": p.relative_to(self.s.workspace).as_posix(),
+                                   "sha256": sha256_file(p)} for p in source_paths],
+                "output_file": output_name,
+                "output_sha256": sha256_file(temporary),
+                "columns": schema, "rows": count,
+                "note": "Exact-row deduplication; not leakage-safe dataset splitting",
+            }
+            # The sidecar is named by output basename so multiple merges remain distinct.
+            sidecar = output_folder / f"{output_name}.manifest.json"
+            if sidecar.exists() or target.exists():
+                raise ValueError("Output or provenance manifest already exists")
+            temporary.replace(target)
+            sidecar.write_text(json.dumps(provenance, indent=2), encoding="utf-8")
+        finally:
+            temporary.unlink(missing_ok=True)
         return {"file": str(target), "relative_path": "datasets/merged/"+output_name,
-                "rows": count, "columns": schema, "source_count": len(paths)}
+                "rows": count, "columns": schema, "source_count": len(paths),
+                "provenance_manifest": "datasets/merged/" + output_name + ".manifest.json",
+                "sha256": provenance["output_sha256"]}
