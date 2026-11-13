@@ -49,6 +49,7 @@ def test_mcp_sdk_inprocess_client_roundtrip(settings):
                 "resource_select", {"mode": "cpu", "workload": "preprocess"}
             )
             assert not result.is_error
-            assert result.structured_content
+            assert result.content
+            assert 'cpu' in str(result.content).lower()
 
     asyncio.run(exercise())
