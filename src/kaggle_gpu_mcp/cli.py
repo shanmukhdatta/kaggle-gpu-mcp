@@ -14,6 +14,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Kaggle GPU MCP")
     commands = parser.add_subparsers(dest="action", required=True)
     commands.add_parser("serve", help="Run MCP via stdio (worker must run separately)")
+    http = commands.add_parser("serve-http-local", help="Run MCP over loopback-only Streamable HTTP")
+    http.add_argument("--port", type=int, default=8000, help="Local port (1024-65535)")
     worker = commands.add_parser("worker", help="Run background worker")
     worker.add_argument("--once", action="store_true", help="Perform one scheduler tick")
     commands.add_parser("demo", help="Create editable example scripts in workspace")
@@ -30,6 +32,16 @@ def main() -> None:
         if args.action == "serve":
             from .server import create_server
             create_server(settings).run(transport="stdio")
+        elif args.action == "serve-http-local":
+            if not 1024 <= args.port <= 65535:
+                parser.error("--port must be between 1024 and 65535")
+            from .server import create_server
+            # Safe for local clients only: this endpoint has no OAuth layer.
+            # Never bind to 0.0.0.0 or expose it through a public tunnel.
+            create_server(settings).run(
+                transport="streamable-http", host="127.0.0.1", port=args.port,
+                json_response=True, stateless_http=True,
+            )
         elif args.action == "worker":
             w = Worker(settings)
             w.tick() if args.once else w.run_forever()
