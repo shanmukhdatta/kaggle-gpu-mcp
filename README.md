@@ -8,7 +8,7 @@ Submit scripts and notebooks, run a two-stage CPU data-preparation -> GPU PyTorc
 
 ## Features
 
-- MCP SDK v2 tools over **local stdio**, plus independent, persistent polling worker.
+- MCP SDK v2 tools over **local stdio or loopback-only Streamable HTTP**, plus independent, persistent polling worker.
 - Kaggle notebook/script packaging and unique private Kaggle kernel per job.
 - Automatic CPU/GPU *recommendation* (not a guaranteed allocation); T4 default GPU request.
 - Kaggle CLI `kernels push/status/logs/output` adapter with subprocess timeouts.
@@ -64,6 +64,25 @@ kaggle-gpu-mcp job JOB_ID_FROM_OUTPUT
 ```
 
 The worker queues a Kaggle **CPU** script to create `merged.csv`, downloads its output, then queues a **GPU** script attaching the previous Kaggle notebook's outputs as an input. The GPU script trains a tiny PyTorch neural network, writes `model.pt`, `metrics.json`, and `run_manifest.json`, and the worker validates the actual CUDA run. It generates synthetic data only when no Kaggle dataset CSV is attached. This is a connectivity smoke test, **not a trained production model**.
+
+## Local Streamable HTTP MCP (new)
+
+Use this option for a **local MCP client** that accepts HTTP endpoints rather than stdio.
+Start the worker in another terminal, then run:
+
+```powershell
+kaggle-gpu-mcp worker
+# In a SECOND terminal with the same virtual environment and configuration:
+kaggle-gpu-mcp serve-http-local --port 8000
+```
+
+Connect the local MCP client to `http://127.0.0.1:8000/mcp`.
+
+The HTTP transport intentionally binds to **127.0.0.1 only**. It is **not authenticated** and **must not** be exposed using port forwarding, a public tunnel, a reverse proxy, or `0.0.0.0`. Local programs may access the endpoint; do not use it on an untrusted shared machine. The existing `KGM_ALLOW_SUBMISSIONS=1` gate and per-call `approved=true` requirement are still in effect.
+
+**For a remote ChatGPT custom connector:** this local endpoint is insufficient. A production deployment must add HTTPS, properly validated user-scoped OAuth 2.1, resource-server authorization, tenant isolation, and hosting. No ChatGPT availability is implied by running the local server.
+
+Test the transport without Kaggle credentials by calling the read-only `resource_select` tool in a compatible local MCP client. For local stdio hosts, continue to use `kaggle-gpu-mcp serve`.
 
 ## MCP client configuration (local stdio)
 
@@ -155,7 +174,7 @@ pytest -q
 python -m compileall -q src
 ```
 
-The GitHub CI quality matrix validates MCP SDK v2 tool registration and the Kaggle CLI adapter command contract. Local `pytest` may skip the MCP contract test if the SDK is not installed. Run the **real Kaggle GPU acceptance test** manually with `kaggle-gpu-mcp run-demo --approve` after setting credentials. A local unit-test pass cannot prove real Kaggle authentication, GPU allocation, notebook completion or SMTP delivery. For additional detail read [architecture](docs/ARCHITECTURE.md), [dataset provenance](docs/DATASETS.md), [notifications](docs/NOTIFICATIONS.md), [Windows/Antigravity testing](docs/ANTIGRAVITY_ACCEPTANCE.md), and [acceptance checklist](docs/ACCEPTANCE.md).
+The GitHub CI quality matrix validates MCP SDK v2 tool registration, an in-process SDK client round-trip, loopback HTTP launch options, and the Kaggle CLI adapter command contract. Local `pytest` may skip the MCP contract test if the SDK is not installed. Run the **real Kaggle GPU acceptance test** manually with `kaggle-gpu-mcp run-demo --approve` after setting credentials. A local unit-test pass cannot prove real Kaggle authentication, GPU allocation, notebook completion or SMTP delivery. For additional detail read [architecture](docs/ARCHITECTURE.md), [dataset provenance](docs/DATASETS.md), [notifications](docs/NOTIFICATIONS.md), [Windows/Antigravity testing](docs/ANTIGRAVITY_ACCEPTANCE.md), and [acceptance checklist](docs/ACCEPTANCE.md).
 
 ## Publish to GitHub
 
